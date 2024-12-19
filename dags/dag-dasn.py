@@ -2,7 +2,10 @@ from airflow.decorators import dag, task
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from airflow.providers.google.cloud.transfers import gcs_to_bigquery
 from airflow.models import Variable
+
+
 
 from datetime import datetime, timedelta
 import logging
@@ -17,6 +20,11 @@ conn_id = "gcs_default"
 bucket_name = Variable.get("bucket_name")
 prefix = Variable.get("prefix")
 dest_data = Variable.get("dest_data")
+
+
+DATASET_NAME = 'teste2'
+TABLE_NAME = 'daspag'
+
 default_args = {
     'params': {"prefix":'testes/pastaRaw/daspag',
                "dest_data": 'testes/pastaParquet/daspag'
@@ -109,18 +117,42 @@ def init():
         # Criação de dados em parquet
         df_content.write_parquet(os.path.join(dest_path_root, f"content/daspag-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
         df_meta.write_parquet(os.path.join(dest_path_root, f"meta/daspagmeta-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
+
+        dict_paths = {
+            "content": os.path.join(dest_path_root, "content"),
+            "meta": os.path.join(dest_path_root, "meta")
+        }
         
         logging.info(f"Parquet criado em {dest_path_root}")
         #duckdb.close()
-        logging.info(f"Duckdb fechado")
+        logging.info(f"path_criados em {dict_paths}")
 
         return dest_path_root
 
-
+    @task
+    def print_excom():
+        teste =  "{{ task_instance.xcom_pull(task_ids='process_csv_to_parquet') }}"
+        logging.info(f'A xcom é: {teste}')
+   
+   
+    """"
+    load_csv = gcs_to_bigquery(
+        task_id="gcs_to_bigquery_dasn_content",
+        bucket=bucket_name,
+        source_objects=xcom.get(task_ids="process_csv_to_parquet", key="content"),
+        destination_project_dataset_table=f"{DATASET_NAME}.{TABLE_NAME}",
+        schema_fields=[
+            {"name": "name", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "post_abbr", "type": "STRING", "mode": "NULLABLE"},
+        ],
+        write_disposition="WRITE_TRUNCATE",
+    )
+    """ 
     get_files = zip_to_gcs()
+    teste = print_excom()
     compress = process_csv_to_parquet(get_files)
 
-    start >> get_files >> compress >> end
+    start >>  get_files >> compress >> teste >> end
 
 dag = init()    
 
