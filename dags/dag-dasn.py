@@ -2,9 +2,11 @@ from airflow.decorators import dag, task
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
-from airflow.providers.google.cloud.transfers import gcs_to_bigquery
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.operators.gcs import GCSDeleteObjectsOperator
+from airflow.operators.bash import BashOperator
 from airflow.models import Variable
-
+ 
 
 
 from datetime import datetime, timedelta
@@ -66,7 +68,7 @@ def init():
         return destination_file
     
 
-    @task
+    @task(multiple_outputs=True)
     def process_csv_to_parquet(destination_file):
         bucket_name = Variable.get("bucket_name")
         #dest_data = "{{ params.dest_data }}"
@@ -105,56 +107,85 @@ def init():
         df_db = duckdb.read_csv(f"gs://{bucket_name}/{destination_file}*" , sep='|', header=False, dtype=tipos, names=nomes_colunas)
 
         # Filtros de conteúdo e metadados
-        df_content = duckdb.sql('SELECT * FROM df_db WHERE identificacao_registro = 1')
-        df_meta = duckdb.sql('SELECT * FROM df_db WHERE identificacao_registro = 0')
+        df_content = duckdb.sql('''
+            SELECT "identificacao_registro",
+                "numero_das",
+                "data_arrecadacao",
+                "codigo_banco",
+                "codigo_agencia",
+                "numero_remessa_bancaria",
+                "numero_daf607",
+                "valor_total_das",
+                "sequencial_registro" 
+            FROM df_db WHERE identificacao_registro = 1
+            '''
+            )
+                
+        df_meta = duckdb.sql('''
+            SELECT "identificacao_registro",
+                "data_arrecadacao",
+                "numero_remessa_bancaria",
+                "numero_daf607",
+                "valor_total_das",
+                "sequencial_registro"
+            FROM df_db WHERE identificacao_registro = 0
+            '''
+            )
 
         # Extracao periodo de pagamentos
         periodo_arr = duckdb.sql("""
             SELECT MAX(CAST(data_arrecadacao AS INT)) AS MAX_PER, MIN(CAST(data_arrecadacao AS INT)) AS MIN_PER FROM df_meta
         """ ).fetchnumpy()
         
-        dest_path_root = f'gs://{bucket_name}/{dest_data}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
+        prefix_dest  = f"{dest_data}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/"
+        dest_path_root = os.path.join(f'gs://{bucket_name}/', prefix_dest)
+
         # Criação de dados em parquet
         df_content.write_parquet(os.path.join(dest_path_root, f"content/daspag-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
         df_meta.write_parquet(os.path.join(dest_path_root, f"meta/daspagmeta-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
 
         dict_paths = {
-            "content": os.path.join(dest_path_root, "content"),
-            "meta": os.path.join(dest_path_root, "meta")
+            "content": os.path.join(prefix_dest, "content"),
+            "meta": os.path.join(prefix_dest, "meta")
         }
         
         logging.info(f"Parquet criado em {dest_path_root}")
         #duckdb.close()
         logging.info(f"path_criados em {dict_paths}")
 
-        return dest_path_root
+        return dict_paths
 
-    @task
-    def print_excom():
-        teste =  "{{ task_instance.xcom_pull(task_ids='process_csv_to_parquet') }}"
-        logging.info(f'A xcom é: {teste}')
-   
-   
-    """"
-    load_csv = gcs_to_bigquery(
+    load_content_parquet = GCSToBigQueryOperator(
         task_id="gcs_to_bigquery_dasn_content",
+        gcp_conn_id=conn_id,  
         bucket=bucket_name,
-        source_objects=xcom.get(task_ids="process_csv_to_parquet", key="content"),
-        destination_project_dataset_table=f"{DATASET_NAME}.{TABLE_NAME}",
-        schema_fields=[
-            {"name": "name", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "post_abbr", "type": "STRING", "mode": "NULLABLE"},
-        ],
-        write_disposition="WRITE_TRUNCATE",
+        source_format='PARQUET',
+        source_objects=[os.path.join("{{ ti.xcom_pull(task_ids='process_csv_to_parquet', key='content') }}", "*.parquet")],
+        destination_project_dataset_table=f"{DATASET_NAME}.daspag",
+        write_disposition="WRITE_APPEND",
     )
-    """ 
-    get_files = zip_to_gcs()
-    teste = print_excom()
-    compress = process_csv_to_parquet(get_files)
 
-    start >>  get_files >> compress >> teste >> end
+    load_meta_parquet = GCSToBigQueryOperator(
+        task_id="gcs_to_bigquery_dasn_meta",
+        gcp_conn_id=conn_id, 
+        bucket=bucket_name,
+        source_format='PARQUET',
+        source_objects=[os.path.join("{{ ti.xcom_pull(task_ids='process_csv_to_parquet', key='meta') }}", "*.parquet")],
+        destination_project_dataset_table=f"{DATASET_NAME}.daspag_meta",
+        write_disposition="WRITE_APPEND",
+    )
+
+    delete_gcs_tmp = GCSDeleteObjectsOperator(
+        task_id="delete_gcs_tmp",
+        bucket_name=bucket_name,
+        prefix="{{ ti.xcom_pull(task_ids='zip_to_gcs', key='return_value') }}",
+        gcp_conn_id=conn_id
+    )
+    
+    unzip_gcs = zip_to_gcs()
+    save_parquet_file = process_csv_to_parquet(unzip_gcs)
+
+    start >>  unzip_gcs >> save_parquet_file >> [load_content_parquet, load_meta_parquet] >> delete_gcs_tmp >> end
 
 dag = init()    
 
-
-        
