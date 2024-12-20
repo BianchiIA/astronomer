@@ -1,0 +1,12 @@
+## Acessar o bucket do seu ambiente
+gcloud composer environments describe airflow --location southamerica-east1 --format="get(config.dagGcsPrefix)"
+
+
+## Add Dag ao ambiente
+gcloud composer environments storage dags import --environment airflow --location southamerica-east1 --source="dags/dag-dasn.py"
+
+## Excluir Dag do ambiente
+gcloud composer environments storage dags delete \
+    --environment airflow \
+    --location southamerica-east1 \
+    DAG_FILE

@@ -24,8 +24,8 @@ prefix = Variable.get("prefix")
 dest_data = Variable.get("dest_data")
 
 
-DATASET_NAME = 'teste2'
-TABLE_NAME = 'daspag'
+DATASET_NAME = Variable.get("dataset_name")
+
 
 default_args = {
     'params': {"prefix":'testes/pastaRaw/daspag',
@@ -72,11 +72,17 @@ def init():
     def process_csv_to_parquet(destination_file):
         bucket_name = Variable.get("bucket_name")
         #dest_data = "{{ params.dest_data }}"
-        duckdb.sql(f"""CREATE SECRET (
-        TYPE GCS,
-        KEY_ID {Variable.get("KEY_ID_GCS")},
-        SECRET {Variable.get("SECRET_GCS")}
-        );""")
+
+        duckdb.sql("""
+        INSTALL httpfs; -- Instalar extensão necessária
+        LOAD httpfs;    -- Carregar a extensão
+        """)
+        duckdb.sql(f"""
+        SET s3_region = 'auto'; -- DuckDB usa 'auto' para regiões GCS
+        SET s3_access_key_id = '{Variable.get("KEY_ID_GCS")}';
+        SET s3_secret_access_key = '{Variable.get("SECRET_GCS")}';
+        """)
+        #duckdb.sql(f'''CREATE SECRET (TYPE GCS, KEY_ID {Variable.get("KEY_ID_GCS")}, SECRET {Variable.get("SECRET_GCS")});''')
 
 
         nomes_colunas = [
@@ -103,7 +109,7 @@ def init():
             'sequencial_registro': 'VARCHAR'}
     
         # Criação de um banco de dados DuckDB em memória
-        
+        logging.info(f"lendo arquivos de: gs://{bucket_name}/{destination_file}*")
         df_db = duckdb.read_csv(f"gs://{bucket_name}/{destination_file}*" , sep='|', header=False, dtype=tipos, names=nomes_colunas)
 
         # Filtros de conteúdo e metadados
@@ -137,7 +143,7 @@ def init():
             SELECT MAX(CAST(data_arrecadacao AS INT)) AS MAX_PER, MIN(CAST(data_arrecadacao AS INT)) AS MIN_PER FROM df_meta
         """ ).fetchnumpy()
         
-        prefix_dest  = f"{dest_data}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/"
+        prefix_dest  = f'{dest_data}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
         dest_path_root = os.path.join(f'gs://{bucket_name}/', prefix_dest)
 
         # Criação de dados em parquet
