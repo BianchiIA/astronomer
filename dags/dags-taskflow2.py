@@ -3,13 +3,18 @@ from airflow.utils.task_group import TaskGroup
 from datetime import datetime, timedelta
 from typing import Dict
 import logging
+#from airflow.models.param import Param
 
+params = {
+    'teste': "Funcionou",
+    'teste2': 6}
 
 @dag(
     start_date=datetime(2024, 11, 25),
     schedule_interval='@once',
     dag_id='das-taskflow-2',
-    catchup=False
+    catchup=False,
+    params=params
 )
 def cnpj_etl():
     
@@ -28,14 +33,27 @@ def cnpj_etl():
         def process_cnpj(cnpj_data: Dict[str, str]) -> Dict[str, str]:
             processed_data = {'razao':cnpj_data['NOME FANTASIA'], 'STATUS':cnpj_data['STATUS']}
             return processed_data
-        
+
+
+    
+
+
+
+
         process = process_cnpj(extract_cnpj())
+
+    @task
+    def params_test():
+        logging.info(params['teste2'])
+        return params['teste']
+    
+    teste = params_test()
 
     with TaskGroup("store_group") as store_group:
         @task(retries=3, retry_delay=timedelta(minutes=5))
         def store_cnpj(processed_data: Dict[str, str]) -> None:
             logging.info(processed_data)
 
-        store_cnpj(process)
+        store_cnpj(process) >> teste
 
 cnpj_etl()
