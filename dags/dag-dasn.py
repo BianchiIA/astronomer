@@ -21,7 +21,7 @@ from airflow.models.param import Param, ParamsDict
 params = {
     'prefix': Param(default='testes/pastaRaw/daspag', type="string"),
     'dest_data': Param(default='testes/pastaRaw/daspag', type="string"),
-    'dataset_name': 'teste2'
+    'dataset_name': Param(default='daspag', type="string")
     }
 
 
@@ -46,6 +46,11 @@ def init():
 
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
+
+    @task
+    def get_params(**kwargs):
+        params: ParamsDict = kwargs["params"]
+        return params
 
     @task
     def zip_to_gcs(**kwargs):
@@ -153,7 +158,8 @@ def init():
 
         dict_paths = {
             "content": os.path.join(prefix_dest, "content"),
-            "meta": os.path.join(prefix_dest, "meta")
+            "meta": os.path.join(prefix_dest, "meta"),
+            "params": params
         }
         
         logging.info(f"Parquet criado em {dest_path_root}")
