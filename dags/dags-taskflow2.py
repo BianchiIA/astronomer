@@ -3,11 +3,12 @@ from airflow.utils.task_group import TaskGroup
 from datetime import datetime, timedelta
 from typing import Dict
 import logging
-#from airflow.models.param import Param
+from airflow.models.param import Param, ParamsDict
 
 params = {
     'teste': "Funcionou",
-    'teste2': 6}
+    'teste2': 6,
+    'teste3': Param(default="Funcionou", type="string")}
 
 @dag(
     start_date=datetime(2024, 11, 25),
@@ -43,10 +44,12 @@ def cnpj_etl():
         process = process_cnpj(extract_cnpj())
 
     @task
-    def params_test():
-        logging.info(params['teste2'])
-        return params['teste']
+    def params_test(**kwargs):
+        #var = params['teste3']
+        params: ParamsDict = kwargs["params"]
+        return params['teste3']
     
+
     teste = params_test()
 
     with TaskGroup("store_group") as store_group:

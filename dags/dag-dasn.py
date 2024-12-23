@@ -4,7 +4,6 @@ from airflow.utils.task_group import TaskGroup
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
 from airflow.providers.google.cloud.operators.gcs import GCSDeleteObjectsOperator
-from airflow.operators.bash import BashOperator
 from airflow.models import Variable
  
 
@@ -17,21 +16,21 @@ import os
 
 import duckdb
 
+from airflow.models.param import Param, ParamsDict
+
+params = {
+    'prefix': Param(default='testes/pastaRaw/daspag', type="string"),
+    'dest_data': Param(default='testes/pastaRaw/daspag', type="string"),
+    'dataset_name': 'teste2'
+    }
+
 
 conn_id = "gcs_default"
 bucket_name = Variable.get("bucket_name")
-prefix = Variable.get("prefix")
-dest_data = Variable.get("dest_data")
-
-
+#prefix = Variable.get("prefix")
+#dest_data = Variable.get("dest_data")
 DATASET_NAME = Variable.get("dataset_name")
 
-
-default_args = {
-    'params': {"prefix":'testes/pastaRaw/daspag',
-               "dest_data": 'testes/pastaParquet/daspag'
-               }
-}
 
 
 
@@ -40,7 +39,8 @@ default_args = {
     start_date=datetime(2024, 11, 25),
     schedule_interval='@once',
     catchup=False,
-    #default_args=default_args
+    params=params,
+    dagrun_timeout=timedelta(hours=5)
 )
 def init():
 
@@ -48,10 +48,10 @@ def init():
     end = EmptyOperator(task_id="end")
 
     @task
-    def zip_to_gcs():
-        #prefix = "{{ params.prefix }}"
+    def zip_to_gcs(**kwargs):
+        params: ParamsDict = kwargs["params"] 
         hook = GCSHook(gcp_conn_id=conn_id)
-        files = hook.list(bucket_name, prefix=prefix, delimiter=".zip")
+        files = hook.list(bucket_name, prefix=params["prefix"], delimiter=".zip")
         destination_file = f'tmp/{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
         for i in range(len(files)):
             zip_data = io.BytesIO(hook.download(bucket_name, files[i]))
@@ -69,9 +69,10 @@ def init():
     
 
     @task(multiple_outputs=True)
-    def process_csv_to_parquet(destination_file):
+    def process_csv_to_parquet(destination_file, **kwargs):
+
+        params : ParamsDict = kwargs["params"]
         bucket_name = Variable.get("bucket_name")
-        #dest_data = "{{ params.dest_data }}"
 
         duckdb.sql("""
         INSTALL httpfs; -- Instalar extensão necessária
@@ -143,7 +144,7 @@ def init():
             SELECT MAX(CAST(data_arrecadacao AS INT)) AS MAX_PER, MIN(CAST(data_arrecadacao AS INT)) AS MIN_PER FROM df_meta
         """ ).fetchnumpy()
         
-        prefix_dest  = f'{dest_data}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
+        prefix_dest  = f'{params["dest_data"]}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
         dest_path_root = os.path.join(f'gs://{bucket_name}/', prefix_dest)
 
         # Criação de dados em parquet
@@ -167,7 +168,7 @@ def init():
         bucket=bucket_name,
         source_format='PARQUET',
         source_objects=[os.path.join("{{ ti.xcom_pull(task_ids='process_csv_to_parquet', key='content') }}", "*.parquet")],
-        destination_project_dataset_table=f"{DATASET_NAME}.daspag",
+        destination_project_dataset_table=f"{params['dataset_name']}.daspag",
         write_disposition="WRITE_APPEND",
     )
 
@@ -177,7 +178,7 @@ def init():
         bucket=bucket_name,
         source_format='PARQUET',
         source_objects=[os.path.join("{{ ti.xcom_pull(task_ids='process_csv_to_parquet', key='meta') }}", "*.parquet")],
-        destination_project_dataset_table=f"{DATASET_NAME}.daspag_meta",
+        destination_project_dataset_table=f"{params['dataset_name']}.daspag_meta",
         write_disposition="WRITE_APPEND",
     )
 
