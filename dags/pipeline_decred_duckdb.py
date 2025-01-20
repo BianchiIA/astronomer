@@ -25,7 +25,7 @@ import logging
 conn_id = "gcs_default"
 params_dict = {
     'BUCKET_NAME': Param(default='dataita', type="string"),
-    'SOURCE_FOLDER': Param(default='decred/pastaRaw/pastaZip', type="string"),
+    'prefix': Param(default='decred/pastaRaw/pastaZip', type="string"),
     'ZIP_FOLDER': Param(default='decred/pastaRaw/pastaZip', type="string"),
     'UNZIP_FOLDER': Param(default='decred/pastaRaw/pastaUnzip', type="string"),
     'DEST_FOLDER_PROCESSED': Param(default='decred/pastaProcessed', type="string"),
@@ -43,11 +43,18 @@ bucket_name = params_default["BUCKET_NAME"]
     start_date=datetime(2024, 10, 3),
     schedule="@once",
     doc_md=__doc__,
-    catchup=False
+    catchup=False,
+    params=params_default
 )
 def decred_etl_duckdb():
-
+    
     start = EmptyOperator(task_id='start')
+    
+
+    @task
+    def get_files(**kwargs):
+
+        
 
     @task
     def zip_to_gcs(**kwargs):
@@ -56,7 +63,7 @@ def decred_etl_duckdb():
 
         hook = GCSHook(gcp_conn_id=conn_id)
         files = hook.list(bucket_name, prefix=params["prefix"], delimiter=".zip")
-        destination_file = f'tmp/{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
+        path_descompacted_files = f'tmp/{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
         for i in range(len(files)):
             zip_data = BytesIO(hook.download(bucket_name, files[i]))
             with ZipFile(zip_data, 'r') as zip_ref:
@@ -64,35 +71,41 @@ def decred_etl_duckdb():
                     if file.endswith('.zip'):
                         continue  # Skip directories in the zip file
                     file_data = zip_ref.read(file)
-                    print(destination_file + file)
-                    print(logging.info(destination_file + file))
-                    hook.upload(bucket_name,object_name= destination_file + file, data=file_data)
+                    print(path_descompacted_files + file)
+                    print(logging.info(path_descompacted_files + file))
+                    hook.upload(bucket_name,object_name= path_descompacted_files + file, data=file_data)
 
 
-        return destination_file
+        return path_descompacted_files
 
 
     @task(task_id="teste")
-    def get_metadata(path_file):
+    def get_metadata():
 
-        file = path_file.split('/')[-1]
-        file = file.split('_')
-        file[-1] = file[-1].strip('.zip')
+        hook = GCSHook(gcp_conn_id=conn_id)
+        files = hook.list(bucket_name, prefix=params_default["prefix"], delimiter=".zip")
+        print(files)
+        #file_name = files.split('/')[-1]
+        #file = file_name.split('_')
+        #file[-1] = file[-1].strip('.zip')
 
-        id_file = file[4], file[5], file[6]
+        #id_file = file[4], file[5], file[6]
 
         df = pd.DataFrame(data=np.array(file).reshape(-1, len(file)),
             columns = ['tipo1', 'tipo2', 'tipo3','cnpj_minicipio', 'df_ref_init', 'df_ref_end', 'id_extact' ])
+        ## Carregar paraquet e biquery
 
-        return id_file
+        return file_name
 
         
 
 
     @task(multiple_outputs=True)
-    def process_csv_to_parquet(destination_file, **kwargs):
+    def process_csv_to_parquet(path_descompacted_files, **kwargs):
 
         params : ParamsDict = kwargs["params"]
+
+        id_file = params['id_file']
 
         duckdb.sql("""
         INSTALL httpfs; -- Instalar extensão necessária
@@ -139,21 +152,16 @@ def decred_etl_duckdb():
 
     
         # Criação de um banco de dados DuckDB em memória
-        logging.info(f"lendo arquivos de: gs://{bucket_name}/{destination_file}*")
-        df_db = duckdb.read_csv(f"gs://{bucket_name}/{destination_file}*.csv",dtype=tipos, decimal=',')
+        logging.info(f"lendo arquivos de: gs://{bucket_name}/{path_descompacted_files}*")
+        df_db = duckdb.read_csv(f"gs://{bucket_name}/{path_descompacted_files}*.csv",dtype=tipos, decimal=',')
 
-
-        # Extracao periodo de pagamentos
-        periodo_arr = duckdb.sql("""
-            SELECT MAX(CAST(data_arrecadacao AS INT)) AS MAX_PER, MIN(CAST(data_arrecadacao AS INT)) AS MIN_PER FROM df_meta
-        """ ).fetchnumpy()
         
         prefix_dest  = f'{params["dest_data"]}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
         dest_path_root = os.path.join(f'gs://{bucket_name}/', prefix_dest)
 
         # Criação de dados em parquet
-        df_content.write_parquet(os.path.join(dest_path_root, f"content/daspag-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
-        df_meta.write_parquet(os.path.join(dest_path_root, f"meta/daspagmeta-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
+        df_db.write_parquet(os.path.join(dest_path_root, f"content/daspag-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
+        #df_meta.write_parquet(os.path.join(dest_path_root, f"meta/daspagmeta-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
 
         dict_paths = {
             "content": os.path.join(prefix_dest, "content"),
@@ -197,8 +205,10 @@ def decred_etl_duckdb():
 
     end = EmptyOperator(task_id='end')
 
-    a = get_metadata(path_file='testes/pastaRaw/pastaZip/EXTTR_DIMP_SMF_28741080000155_01012023_31012023_314030.zip')
+    extract_zip = zip_to_gcs()
+    a = get_metadata()
 
-    start >> a >> end
+
+    start >> extract_zip >> a >> end
 
 decred_etl_duckdb()
