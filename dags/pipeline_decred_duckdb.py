@@ -5,7 +5,7 @@ Dag de Pipeline de ETL dos arquivos decred: zip >> BigQuery
 from airflow.decorators import dag, task
 from airflow.operators.empty import EmptyOperator
 from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import get_current_context
 from airflow.models.param import Param, ParamsDict
 from airflow.models import Variable
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
@@ -34,8 +34,8 @@ params_dict = {
 }
 
 
-params_default = ParamsDict(params_dict)
-bucket_name = params_default["BUCKET_NAME"]
+params = ParamsDict(params_dict)
+#bucket_name = params_default["BUCKET_NAME"]
 
 
 @dag(
@@ -44,26 +44,52 @@ bucket_name = params_default["BUCKET_NAME"]
     schedule="@once",
     doc_md=__doc__,
     catchup=False,
-    params=params_default
+    params=params
 )
 def decred_etl_duckdb():
     
     start = EmptyOperator(task_id='start')
     
 
-    @task
+    @task(task_id="get_files", multiple_outputs=True)
     def get_files(**kwargs):
-
         
-
-    @task
-    def zip_to_gcs(**kwargs):
-
-        params : ParamsDict = kwargs["params"]
+        params : ParamsDict = kwargs["params"]  
 
         hook = GCSHook(gcp_conn_id=conn_id)
-        files = hook.list(bucket_name, prefix=params["prefix"], delimiter=".zip")
-        path_descompacted_files = f'tmp/{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
+        ## Get all zips in folder e subfolders 
+        files = hook.list(params["BUCKET_NAME"], prefix=params["prefix"], delimiter=".zip" )
+        list_name_files = [file.split('/')[-1] for file in files]
+        logging.info(list_name_files)
+        list_period = [f'decred-{file.split("_")[4]}-{file.split("_")[5]}' for file in list_name_files]
+        
+        metadata_decred = {'file_name': list_name_files, 'period': list_period, 'path_files': files}
+
+        return metadata_decred
+
+    @task
+    def extract_path_files(metadata_decred):
+        return metadata_decred['path_files']
+    
+    @task
+    def extract_period(metadata_decred):
+        return metadata_decred['period']    
+
+    @task(map_index_template='{{ period }}')
+    def zip_to_gcs(**kwargs):
+        
+        context = get_current_context()
+        context['decred'] = kwargs['period']
+
+        params : ParamsDict = kwargs["params"]
+        bucket_name = params["BUCKET_NAME"]
+
+
+        hook = GCSHook(gcp_conn_id=conn_id)
+        files = [kwargs['period']]
+          
+        path_descompacted_files = f'tmp/{kwargs['period'].split("/")[-1].replace(".zip","")}/'
+        list_dest_paths = list()
         for i in range(len(files)):
             zip_data = BytesIO(hook.download(bucket_name, files[i]))
             with ZipFile(zip_data, 'r') as zip_ref:
@@ -78,6 +104,10 @@ def decred_etl_duckdb():
 
         return path_descompacted_files
 
+
+    @task
+    def get_xcom(values):
+        return list(values)
 
     @task(task_id="teste")
     def get_metadata():
@@ -202,13 +232,13 @@ def decred_etl_duckdb():
         force_pull=False,
         mount_tmp_dir=False
     )
-
+    #start = EmptyOperator(task_id='start')
     end = EmptyOperator(task_id='end')
+    list_files = get_files()
+    path_files = extract_path_files(list_files)
+    extract_zip = zip_to_gcs.expand(period=path_files)
+    get_path_extract = get_xcom(extract_zip)
 
-    extract_zip = zip_to_gcs()
-    a = get_metadata()
-
-
-    start >> extract_zip >> a >> end
+    start >> list_files >> path_files >> extract_zip >> get_path_extract >> end
 
 decred_etl_duckdb()
