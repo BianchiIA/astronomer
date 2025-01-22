@@ -10,6 +10,7 @@ from airflow.models.param import Param, ParamsDict
 from airflow.models import Variable
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.providers.google.cloud.operators.cloud_run import CloudRunUpdateJobOperator
+from astro import sql as aql
 
 import duckdb
 import pandas as pd
@@ -25,10 +26,8 @@ import logging
 conn_id = "gcs_default"
 params_dict = {
     'BUCKET_NAME': Param(default='dataita', type="string"),
-    'prefix': Param(default='decred/pastaRaw/pastaZip', type="string"),
-    'ZIP_FOLDER': Param(default='decred/pastaRaw/pastaZip', type="string"),
-    'UNZIP_FOLDER': Param(default='decred/pastaRaw/pastaUnzip', type="string"),
-    'DEST_FOLDER_PROCESSED': Param(default='decred/pastaProcessed', type="string"),
+    'prefix': Param(default='testes/pastaRaw/pastaZip', type="string"),
+    'dest_data': Param(default='teste/decred/pastaProcessed', type="string"),
     'TABLE_NAME': Param(default='decred', type="string"),
     'SERVICE': Param(default='duckdb', type="string")
 }
@@ -54,7 +53,7 @@ def decred_etl_duckdb():
     @task(task_id="get_files", multiple_outputs=True)
     def get_files(**kwargs):
         
-        params : ParamsDict = kwargs["params"]  
+        #params : ParamsDict = kwargs["params"]  
 
         hook = GCSHook(gcp_conn_id=conn_id)
         ## Get all zips in folder e subfolders 
@@ -81,7 +80,7 @@ def decred_etl_duckdb():
         context = get_current_context()
         context['decred'] = kwargs['period']
 
-        params : ParamsDict = kwargs["params"]
+        #params : ParamsDict = kwargs["params"]
         bucket_name = params["BUCKET_NAME"]
 
 
@@ -109,33 +108,21 @@ def decred_etl_duckdb():
     def get_xcom(values):
         return list(values)
 
-    @task(task_id="teste")
-    def get_metadata():
-
-        hook = GCSHook(gcp_conn_id=conn_id)
-        files = hook.list(bucket_name, prefix=params_default["prefix"], delimiter=".zip")
-        print(files)
-        #file_name = files.split('/')[-1]
-        #file = file_name.split('_')
-        #file[-1] = file[-1].strip('.zip')
-
-        #id_file = file[4], file[5], file[6]
-
-        df = pd.DataFrame(data=np.array(file).reshape(-1, len(file)),
-            columns = ['tipo1', 'tipo2', 'tipo3','cnpj_minicipio', 'df_ref_init', 'df_ref_end', 'id_extact' ])
-        ## Carregar paraquet e biquery
-
-        return file_name
-
         
 
 
-    @task(multiple_outputs=True)
-    def process_csv_to_parquet(path_descompacted_files, **kwargs):
+    @task(map_index_template='{{ source_csv }}')
+    def process_csv_to_parquet( **kwargs):
 
         params : ParamsDict = kwargs["params"]
+        
+        context = get_current_context()
+        context['source_csv'] = kwargs['source_csv']
 
-        id_file = params['id_file']
+
+        bucket_name = params["BUCKET_NAME"]
+        path_descompacted_files = kwargs['source_csv']
+        
 
         duckdb.sql("""
         INSTALL httpfs; -- Instalar extensão necessária
@@ -186,58 +173,30 @@ def decred_etl_duckdb():
         df_db = duckdb.read_csv(f"gs://{bucket_name}/{path_descompacted_files}*.csv",dtype=tipos, decimal=',')
 
         
-        prefix_dest  = f'{params["dest_data"]}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}/'
+        prefix_dest  = f'{params["dest_data"]}'
         dest_path_root = os.path.join(f'gs://{bucket_name}/', prefix_dest)
-
+        dest_path_file = os.path.join(dest_path_root, f"{kwargs['source_csv'].split('/')[1]}.parquet")
+        logging.info(f'gravando {dest_path_file}')
         # Criação de dados em parquet
-        df_db.write_parquet(os.path.join(dest_path_root, f"content/daspag-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
-        #df_meta.write_parquet(os.path.join(dest_path_root, f"meta/daspagmeta-{periodo_arr['MIN_PER'][0]}-{periodo_arr['MAX_PER'][0]}.parquet"))
-
-        dict_paths = {
-            "content": os.path.join(prefix_dest, "content"),
-            "meta": os.path.join(prefix_dest, "meta")
-        }
+        df_db.write_parquet(dest_path_file)
         
+       
         logging.info(f"Parquet criado em {dest_path_root}")
         #duckdb.close()
-        logging.info(f"path_criados em {dict_paths}")
+        #logging.info(f"path_criados em {dict_paths}")
 
-        return dict_paths
-   
-    
-    transform_and_load = DockerOperator(
-        task_id='transform_and_load',
-        image='southamerica-east1-docker.pkg.dev/infra-itaborai/dataita/decred:latest',
-        docker_url='tcp://docker-socket-proxy:2375',
-        environment={
-            "BUCKET_NAME": "{{ params.BUCKET_NAME }}",
-            "PATH_FOLDER": "{{ params.UNZIP_FOLDER }}",
-            "TABLE": "{{ params.TABLE_NAME }}",
-            "SERVICE": "{{ params.SERVICE }}"
-        },
-        force_pull=False,
-        mount_tmp_dir=False,
-        mem_limit="52g"
-    )
+        return dest_path_file
 
-    clear_gcs_2 = DockerOperator(
-        task_id='clear_gcs_end',
-        image='southamerica-east1-docker.pkg.dev/infra-itaborai/dataita/gcs-operations:latest',
-        docker_url='tcp://docker-socket-proxy:2375',
-        environment={
-            "BUCKET_NAME": "{{ params.BUCKET_NAME }}",
-            "SOURCE_FOLDER": "{{ params.UNZIP_FOLDER }}",
-            "SERVICE": "drop"
-        },
-        force_pull=False,
-        mount_tmp_dir=False
-    )
+
+
+
     #start = EmptyOperator(task_id='start')
     end = EmptyOperator(task_id='end')
     list_files = get_files()
     path_files = extract_path_files(list_files)
     extract_zip = zip_to_gcs.expand(period=path_files)
     get_path_extract = get_xcom(extract_zip)
+    tranform_in_parquet = process_csv_to_parquet.expand(source_csv=get_path_extract)
 
     start >> list_files >> path_files >> extract_zip >> get_path_extract >> end
 
