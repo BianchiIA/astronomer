@@ -4,13 +4,20 @@ Dag de Pipeline de ETL dos arquivos decred: zip >> BigQuery
 
 from airflow.decorators import dag, task
 from airflow.operators.empty import EmptyOperator
-from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.operators.python import get_current_context
 from airflow.models.param import Param, ParamsDict
 from airflow.models import Variable
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
-from airflow.providers.google.cloud.operators.cloud_run import CloudRunUpdateJobOperator
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.operators.gcs import GCSDeleteObjectsOperator
 from astro import sql as aql
+from airflow.models.baseoperator import chain
+from airflow.hooks.base import BaseHook
+
+from google.oauth2 import service_account
+from google.cloud import bigquery
+from airflow.providers.google.common.hooks.base_google import GoogleBaseHook
+
 
 import duckdb
 import pandas as pd
@@ -22,13 +29,21 @@ from zipfile import ZipFile
 from io import BytesIO
 import logging
 
+
+from astro.files import File 
+from astro.table import Table
+from astro.sql import load_file
+from astro.constants import FileType
+from google.cloud import bigquery
+from google.cloud import bigquery_storage_v1
+
 # Defina os parâmetros do DAG (valores padrão podem ser sobrescritos ao iniciar o DAG)
 conn_id = "gcs_default"
 params_dict = {
     'BUCKET_NAME': Param(default='dataita', type="string"),
     'prefix': Param(default='testes/pastaRaw/pastaZip', type="string"),
     'dest_data': Param(default='teste/decred/pastaProcessed', type="string"),
-    'TABLE_NAME': Param(default='decred', type="string"),
+    'dataset': Param(default='teste', type="string"),
     'SERVICE': Param(default='duckdb', type="string")
 }
 
@@ -39,7 +54,7 @@ params = ParamsDict(params_dict)
 
 @dag(
     dag_id='decred_etl_duckdb',
-    start_date=datetime(2024, 10, 3),
+    start_date=datetime(2025, 2, 1),
     schedule="@once",
     doc_md=__doc__,
     catchup=False,
@@ -104,7 +119,7 @@ def decred_etl_duckdb():
         return path_descompacted_files
 
 
-    @task
+    @task(task_id="get_xcom")    
     def get_xcom(values):
         return list(values)
 
@@ -186,6 +201,34 @@ def decred_etl_duckdb():
         #logging.info(f"path_criados em {dict_paths}")
 
         return dest_path_file
+    
+
+    @task(task_id = 'get_xcom2')
+    def get_xcom2(values):
+        values = [value.replace(f'gs://{params["BUCKET_NAME"]}/', '') for value in values]
+        logging.info(f'type values: {type(values)}')
+        return values
+
+
+    @task(task_id='load_parquet_to_bigquery', map_index_template='{{ file_path }}')
+    def load_parquet_to_bigquery(file_path):
+
+        
+
+# Obtém as credenciais da conexão do Airflow
+        hook = GoogleBaseHook(gcp_conn_id="gcs_default")
+        credentials = hook.get_credentials()
+
+        bq_client = bigquery.Client(credentials=credentials)
+        table_ref = 'infra-itaborai.teste.decred'
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.PARQUET,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+        )
+        load_job = bq_client.load_table_from_uri(
+            f"gs://{params['BUCKET_NAME']}/{file_path}", table_ref, job_config=job_config
+        )
+        load_job.result()
 
 
 
@@ -195,9 +238,28 @@ def decred_etl_duckdb():
     list_files = get_files()
     path_files = extract_path_files(list_files)
     extract_zip = zip_to_gcs.expand(period=path_files)
-    get_path_extract = get_xcom(extract_zip)
-    tranform_in_parquet = process_csv_to_parquet.expand(source_csv=get_path_extract)
+    get_path_csv_xcom = get_xcom(extract_zip)
+    tranform_in_parquet = process_csv_to_parquet.expand(source_csv=get_path_csv_xcom)
+    
+    get_path_parquet_xcom = get_xcom2(tranform_in_parquet)
+   # create_table_task = create_bigquery_table()
+    load_tasks = load_parquet_to_bigquery.expand(file_path=get_path_parquet_xcom)
 
-    start >> list_files >> path_files >> extract_zip >> get_path_extract >> end
+
+    delete =  GCSDeleteObjectsOperator(
+                task_id=f"delete_gcs_tmp",
+                    bucket_name=params['BUCKET_NAME'],
+                    prefix="{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}",
+                    gcp_conn_id=conn_id
+                    )
+                #for value, t in zip("{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}", range(len("{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}")))
+                #]
+    
+    chain(start, list_files, path_files, extract_zip, get_path_csv_xcom, tranform_in_parquet, get_path_parquet_xcom, load_tasks, delete, end)
+
+    
+    
+
+    #start >> list_files >> path_files >> extract_zip >> get_path_csv_xcom >> tranform_in_parquet >> get_path_parquet_xcom >> mylist1[-1] >>  mylist2[-1] >> end
 
 decred_etl_duckdb()
