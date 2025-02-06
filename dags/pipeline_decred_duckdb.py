@@ -17,7 +17,7 @@ from airflow.hooks.base import BaseHook
 from google.oauth2 import service_account
 from google.cloud import bigquery
 from airflow.providers.google.common.hooks.base_google import GoogleBaseHook
-
+from google.cloud import storage
 
 import duckdb
 import pandas as pd
@@ -50,7 +50,8 @@ params_dict = {
 
 params = ParamsDict(params_dict)
 #bucket_name = params_default["BUCKET_NAME"]
-
+hook = GoogleBaseHook(gcp_conn_id="gcs_default")
+credentials = hook.get_credentials()
 
 @dag(
     dag_id='decred_etl_duckdb',
@@ -213,14 +214,8 @@ def decred_etl_duckdb():
     @task(task_id='load_parquet_to_bigquery', map_index_template='{{ file_path }}')
     def load_parquet_to_bigquery(file_path):
 
-        
-
-# Obtém as credenciais da conexão do Airflow
-        hook = GoogleBaseHook(gcp_conn_id="gcs_default")
-        credentials = hook.get_credentials()
-
         bq_client = bigquery.Client(credentials=credentials)
-        table_ref = 'infra-itaborai.teste.decred'
+        table_ref = f'infra-itaborai.{params["dataset"]}.decred'
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
             write_disposition=bigquery.WriteDisposition.WRITE_APPEND
@@ -231,7 +226,14 @@ def decred_etl_duckdb():
         load_job.result()
 
 
-
+    @task(map_index_template='{{ folder_path }}')
+    def delete_folder(folder_path):
+        
+        client = storage.Client(credentials=credentials)
+        bucket = client.bucket(params['BUCKET_NAME'])
+        blobs = bucket.list_blobs(prefix=folder_path)
+        for blob in blobs:
+            blob.delete()
 
     #start = EmptyOperator(task_id='start')
     end = EmptyOperator(task_id='end')
@@ -245,17 +247,11 @@ def decred_etl_duckdb():
    # create_table_task = create_bigquery_table()
     load_tasks = load_parquet_to_bigquery.expand(file_path=get_path_parquet_xcom)
 
+    delete_tmp = delete_folder.expand(folder_path=get_path_csv_xcom)
+   
 
-    delete =  GCSDeleteObjectsOperator(
-                task_id=f"delete_gcs_tmp",
-                    bucket_name=params['BUCKET_NAME'],
-                    prefix="{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}",
-                    gcp_conn_id=conn_id
-                    )
-                #for value, t in zip("{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}", range(len("{{ ti.xcom_pull(task_ids='get_xcom', key='return_value') }}")))
-                #]
     
-    chain(start, list_files, path_files, extract_zip, get_path_csv_xcom, tranform_in_parquet, get_path_parquet_xcom, load_tasks, delete, end)
+    chain(start, list_files, path_files, extract_zip, get_path_csv_xcom, tranform_in_parquet, get_path_parquet_xcom, load_tasks, delete_tmp, end)
 
     
     
