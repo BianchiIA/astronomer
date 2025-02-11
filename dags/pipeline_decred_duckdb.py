@@ -244,7 +244,6 @@ def decred_etl_duckdb():
     tranform_in_parquet = process_csv_to_parquet.expand(source_csv=get_path_csv_xcom)
     
     get_path_parquet_xcom = get_xcom2(tranform_in_parquet)
-   # create_table_task = create_bigquery_table()
     load_tasks = load_parquet_to_bigquery.expand(file_path=get_path_parquet_xcom)
 
     delete_tmp = delete_folder.expand(folder_path=get_path_csv_xcom)
