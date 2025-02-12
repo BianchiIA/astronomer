@@ -14,16 +14,15 @@ from airflow.providers.google.common.hooks.base_google import GoogleBaseHook
 from google.cloud import bigquery
 from google.cloud import storage
 
-import pandas as pd
-import numpy as np
 
 from datetime import datetime
-import os 
 from zipfile import ZipFile
 from io import BytesIO
 import logging
 
 from google.cloud import bigquery
+from plugins.operators.pgdas import PgdasETLOperator
+
 
 # Defina os parâmetros do DAG (valores padrão podem ser sobrescritos ao iniciar o DAG)
 conn_id = "gcs_default"
@@ -116,6 +115,11 @@ def pgdas_etl_test():
         return list(values)
 
     
+    pgdas_parquet = PgdasETLOperator(
+        
+    )
+    
+    
     @task(map_index_template='{{ source_pgdas }}')
     def process_pgdas_to_parquet( **kwargs):
 
@@ -140,6 +144,9 @@ def pgdas_etl_test():
         values = [value.replace(f'gs://{params["BUCKET_NAME"]}/', '') for value in values]
         logging.info(f'type values: {type(values)}')
         return values
+
+
+
 
 
     @task(task_id='load_parquet_to_bigquery', map_index_template='{{ file_path }}')
