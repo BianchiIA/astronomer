@@ -573,7 +573,7 @@ class ETLPgdasHook(BaseHook):
 
         if date_columns is not None:
             for col in date_columns:
-                df_c[col] = pd.to_datetime(df_c[col].apply(lambda x: x[:8]), format='%Y%m%d', errors='coerce')
+                df_c[col] = pd.to_datetime(df_c[col], format='%Y%m%d%H%M%S')
 
         if 'id_pgdas' in df_c:
             df_c['RAIZ_CNPJ'] = df_c['id_pgdas'].apply(lambda x: x[:8])

@@ -18,15 +18,17 @@ credentials = hook.get_credentials()
 def test():
     pgdas = PgdasETLOperator(
         task_id='pgdas_teste',
-        path_file="tmp/90-0000-PUB-PGDASD2018-20211205-01/",
-        file='90-0000-PUB-PGDASD2018-20211205-01.txt',
-        bucket='dataita',
+        prefix="teste/pgdas/",
+        file='pgdas_extract_90-0000-PUB-PGDASD2018-20240728-01.txt',
+        bucket_name='dataita',
         cloud=True,
         project_id='infra-itaborai',
         destination_table='teste.pgdas',
-        credentials=credentials
-
+        credentials=credentials,
+        dataset='teste',
     )
+
+    
     
     
     
