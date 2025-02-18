@@ -17,7 +17,7 @@ from io import BytesIO
 import logging
 
 from plugins.operators.pgdas import PgdasETLOperator
-from plugins.operators.gcs_operators import GCSListObjectsOperator
+from plugins.operators.gcs_operators import GCSListObjectsOperators
 
 # Defina os parâmetros do DAG (valores padrão podem ser sobrescritos ao iniciar o DAG)
 conn_id = "gcs_default"
@@ -68,7 +68,7 @@ def pgdas_etl_test():
                     hook.upload(bucket_name,object_name= path_descompacted_files + file, data=file_data)
 
 
-        return path_descompacted_files
+        return path_descompacted_files + file
 
     @task(map_index_template='{{ folder_path }}')
     def delete_folder(folder_path):
@@ -79,24 +79,28 @@ def pgdas_etl_test():
         for blob in blobs:
             blob.delete()
 
-
+    @task(task_id="get_xcom")    
+    def get_xcom(values):
+        return list(values)
 
     start = EmptyOperator(task_id='start')
 
-    list_files_zip = GCSListObjectsOperator(
+    list_files_zip = GCSListObjectsOperators(
         task_id="list_files",
         bucket_name=params['BUCKET_NAME'],
-        prefix=params['prefix'],  # Define a pasta onde estão os arquivos
+        prefix= params['prefix'],  # Define a pasta onde estão os arquivos
         delimiter=".zip",
         gcp_conn_id=conn_id
     )
 
-    list_files_txt = zip_to_gcs.expand(path_files=list_files_zip)
+
+    list_files_txt = zip_to_gcs.expand(path_files=list_files_zip.output)
+
 
 
     pgdas = PgdasETLOperator.partial(
             task_id='pgdas_teste',
-            prefix=params['prefix'],
+            #prefix=params['prefix'],
             bucket_name=params['BUCKET_NAME'],
             cloud=True,
             project_id='infra-itaborai',
@@ -109,7 +113,7 @@ def pgdas_etl_test():
     
     end = EmptyOperator(task_id='end')
     
-    chain(start, list_files_zip)
+    start >> list_files_zip >> list_files_txt >>  pgdas >> delete_tmp >> end
     
 
 

@@ -6,7 +6,7 @@ from airflow.providers.google.cloud.hooks.gcs import GCSHook
 import logging
 
 
-class GCSListObjectsOperator(BaseOperator): 
+class GCSListObjectsOperators(BaseOperator): 
 
     @apply_defaults 
     def __init__(self, prefix, bucket_name=None, gcp_conn_id='gcs_default', delimiter=None, **kwargs): 
@@ -28,5 +28,5 @@ class GCSListObjectsOperator(BaseOperator):
         logging.info(list_name_files)
                
         #metadata_decred = {'file_name': list_name_files, 'path_files': files}
-
+  
         return files

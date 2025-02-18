@@ -423,8 +423,8 @@ dicionario_aaaaa = {
     ],
     'colunas_reais': None,
     'colunas_datas': [
-        'DT_INI',
-        'DT_FIN'
+        #'DT_INI',
+        #'DT_FIN'
     ]
 }
 
@@ -573,7 +573,8 @@ class ETLPgdasHook(BaseHook):
 
         if date_columns is not None:
             for col in date_columns:
-                df_c[col] = pd.to_datetime(df_c[col], format='%Y%m%d%H%M%S')
+                #df_c[col] = df_c[col].astype(str).str.ljust(14, '0') 
+                df_c[col] = pd.to_datetime(df_c[col], format='mixed', errors='coerce')
 
         if 'id_pgdas' in df_c:
             df_c['RAIZ_CNPJ'] = df_c['id_pgdas'].apply(lambda x: x[:8])

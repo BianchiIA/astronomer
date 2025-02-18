@@ -6,14 +6,14 @@ from google.cloud import storage
 import io
 import logging
 from pandas_gbq import to_gbq
-
+import os
 
 class PgdasETLOperator(BaseOperator):
     @apply_defaults
-    def __init__(self, prefix, file, destination_bucket=None, bucket_name=None, cloud=True, encoding='utf8', mode='r',
+    def __init__(self, file, destination_bucket=None, bucket_name=None, cloud=True, encoding='utf8', mode='r',
                  destination_table=None, project_id=None, credentials=None, if_exists='append', dataset=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.path_file = prefix
+        #self.path_file = prefix
         self.destination_bucket = destination_bucket
         self.file = file #prefix.split('/')[-1]
         self.bucket_name = bucket_name
@@ -31,11 +31,12 @@ class PgdasETLOperator(BaseOperator):
         """
         # Inicializa o Hook
         dados = ETLPgdasHook()
-
+        path = os.path.dirname(self.file)
+        file = self.file.split('/')[-1]
         # Lê o arquivo
         dados.read_pgdas(
-            path_file=self.path_file,
-            file=self.file,
+            path_file=path,
+            file=file,
             bucket=self.bucket_name,
             credentials=self.credentials,  # Passe as credenciais se necessário
             cloud=self.cloud,
