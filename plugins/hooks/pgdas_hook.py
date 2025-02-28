@@ -422,10 +422,7 @@ dicionario_aaaaa = {
         'NomeArquivo'
     ],
     'colunas_reais': None,
-    'colunas_datas': [
-        #'DT_INI',
-        #'DT_FIN'
-    ]
+    'colunas_datas': None #['DT_INI','DT_FIN']
 }
 
 class ETLPgdasHook(BaseHook):
@@ -573,8 +570,13 @@ class ETLPgdasHook(BaseHook):
 
         if date_columns is not None:
             for col in date_columns:
-                #df_c[col] = df_c[col].astype(str).str.ljust(14, '0') 
-                df_c[col] = pd.to_datetime(df_c[col], format='mixed', errors='coerce')
+                df_c[col] = df_c[col].astype(str)
+
+                # Garantir que todas as datas tenham 14 caracteres, adicionando '000000' caso falte a hora
+                df_c[col] = df_c[col].apply(lambda x: x.ljust(14, '0')) #if len(x) == 8 else x)
+
+                # Converter para datetime
+                df_c[col] = pd.to_datetime(df_c[col], format='%Y%m%d%H%M%S', errors='coerce')
 
         if 'id_pgdas' in df_c:
             df_c['RAIZ_CNPJ'] = df_c['id_pgdas'].apply(lambda x: x[:8])

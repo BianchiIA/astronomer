@@ -7,11 +7,15 @@ import io
 import logging
 from pandas_gbq import to_gbq
 import os
+import logging
+
 
 class PgdasETLOperator(BaseOperator):
+
+    template_fields = ("bucket_name", "dataset", "file") 
     @apply_defaults
-    def __init__(self, file, destination_bucket=None, bucket_name=None, cloud=True, encoding='utf8', mode='r',
-                 destination_table=None, project_id=None, credentials=None, if_exists='append', dataset=None, *args, **kwargs):
+    def __init__(self, file, destination_bucket=None, bucket_name=None, cloud=True, encoding='utf8', mode='r'
+                 , project_id=None, credentials=None, if_exists='append', dataset=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         #self.path_file = prefix
         self.destination_bucket = destination_bucket
@@ -20,7 +24,6 @@ class PgdasETLOperator(BaseOperator):
         self.cloud = cloud
         self.encoding = encoding
         self.mode = mode
-        self.destination_table = destination_table
         self.project_id = project_id
         self.if_exists = if_exists
         self.credentials = credentials
@@ -29,6 +32,8 @@ class PgdasETLOperator(BaseOperator):
         """
         Método execute é obrigatório e será chamado quando a tarefa for executada.
         """
+        logging.info(f'my args {self.bucket_name}-{self.file}-{self.dataset}')
+        
         # Inicializa o Hook
         dados = ETLPgdasHook()
         path = os.path.dirname(self.file)
@@ -44,7 +49,10 @@ class PgdasETLOperator(BaseOperator):
             mode=self.mode
         )
         
-      
+        logging.info(f'If exist: {self.if_exists}')
+        logging.info(f'File name: {file}')
+        logging.info(f'bucket: {self.bucket_name}')
+        logging.info(f'dataset: {self.dataset}')
         
         to_gbq(dados.create_dataframe_aaaaa(), destination_table=self.dataset + '.arquivos_importados_aaaaa',
                    if_exists=self.if_exists, credentials=self.credentials)

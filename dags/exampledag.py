@@ -94,7 +94,8 @@ def example_astronauts():
     print_astronaut_craft.partial(greeting="Hello! :)").expand(
         person_in_space=get_astronauts()  # Define dependencies using TaskFlow API syntax
     )
-
+   
+    
 
 # Instantiate the DAG
 example_astronauts()
